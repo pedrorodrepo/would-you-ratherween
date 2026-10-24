@@ -50,7 +50,6 @@
     height: 0; opacity: 0; overflow: hidden; transition: all .4s; z-index: 1;
   }
   .opt .sub { font-size: 14px; opacity: 0; height: 0; transition: opacity .4s; z-index: 1; }
-  /* barra de fundo mostrando a porcentagem após o voto */
   .opt::before {
     content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 0;
     background: #00000030; transition: height .8s cubic-bezier(.2,.8,.2,1);
@@ -143,15 +142,20 @@
   <button class="ghost" id="backEnd">↶ Mudar a última resposta</button>
 </div>
 
+<script src="config.js"></script>
 <script src="questions.js"></script>
 <script>
 (function () {
   const Q = window.QUESTIONS;
   const KEY = "wyr-terror-v1";
+  const CFG = window.WYR_CONFIG || {};
+  const REMOTE = !!(CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY);
 
-  /* ---------- Estatísticas (local, fase 1) ----------
-     Os votos e o progresso ficam no localStorage, indexados pelo id fixo da pergunta.
-     Na fase 2, só estas funções trocam para chamadas ao Supabase. */
+  /* ---------- Estatísticas ----------
+     Modo compartilhado (config.js preenchido): os números vêm do Supabase.
+       Se a rede falhar, mostra só os votos reais deste aparelho, com "(offline)".
+     Modo local (config.js vazio): votos só neste navegador. As porcentagens usam
+       uma base de exemplo para não começarem em 50/50; a contagem mostra só votos reais. */
   const Stats = {
     load() {
       try {
@@ -161,7 +165,6 @@
     },
     save(s) { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) {} },
 
-    // Base de exemplo determinística por id, para as porcentagens não começarem em 50/50.
     seed(id) {
       let h = 0;
       for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
@@ -170,13 +173,33 @@
       return { a: Math.round(p * 120), b: Math.round((1 - p) * 120) };
     },
 
-    counts(id) {
-      const s = this.load(), base = this.seed(id), v = s.votes[id] || { a: 0, b: 0 };
-      return { a: base.a + v.a, b: base.b + v.b };
+    localVotes(id) {
+      return this.load().votes[id] || { a: 0, b: 0 };
     },
 
-    // Registra o voto. "counted" indica se ele de fato somou (false se já tinha votado antes).
-    vote(id, side) {
+    async rpc(fn, body) {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), 5000);
+      try {
+        const r = await fetch(CFG.SUPABASE_URL + "/rest/v1/rpc/" + fn, {
+          method: "POST", signal: ctl.signal,
+          headers: {
+            "Content-Type": "application/json",
+            apikey: CFG.SUPABASE_ANON_KEY,
+            Authorization: "Bearer " + CFG.SUPABASE_ANON_KEY
+          },
+          body: JSON.stringify(body)
+        });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const rows = await r.json();
+        const row = Array.isArray(rows) ? rows[0] : rows;
+        return { a: row ? row.out_a : 0, b: row ? row.out_b : 0 };
+      } finally { clearTimeout(t); }
+    },
+
+    // Registra o voto. Retorna { pa, pb, a, b, offline, counted }:
+    // pa/pb são os números usados na porcentagem; a/b são os votos mostrados.
+    async vote(id, side) {
       const s = this.load();
       const already = s.voted[id];
       if (!s.seen.includes(id)) s.seen.push(id);
@@ -186,11 +209,25 @@
         s.votes[id][side]++;
       }
       this.save(s);
-      return Object.assign(this.counts(id), { counted: !already });
+      const counted = !already;
+      const real = this.localVotes(id);
+
+      if (!REMOTE) {
+        const base = this.seed(id);
+        return { pa: base.a + real.a, pb: base.b + real.b, a: real.a, b: real.b, offline: false, counted };
+      }
+      try {
+        const c = already
+          ? await this.rpc("get_votes", { q: id })
+          : await this.rpc("cast_vote", { q: id, side: side });
+        return { pa: c.a, pb: c.b, a: c.a, b: c.b, offline: false, counted };
+      } catch (e) {
+        return { pa: real.a, pb: real.b, a: real.a, b: real.b, offline: true, counted };
+      }
     },
 
     // Desfaz um voto. Se ele não tinha sido contado (replay), só libera a pergunta.
-    undo(id, side, counted) {
+    async undo(id, side, counted) {
       const s = this.load();
       s.seen = s.seen.filter(x => x !== id);
       if (counted) {
@@ -198,12 +235,15 @@
         delete s.voted[id];
       }
       this.save(s);
+      if (counted && REMOTE) {
+        try { await this.rpc("undo_vote", { q: id, side: side }); } catch (e) { /* melhor esforço */ }
+      }
     }
   };
 
   const $ = (id) => document.getElementById(id);
   const app = $("app"), optA = $("optA"), optB = $("optB");
-  let order = [], pos = 0, answered = false, lastVote = null;
+  let order = [], pos = 0, answered = false, busy = false, lastVote = null;
 
   function shuffle(arr) {
     for (let i = arr.length - 1; i > 0; i--) {
@@ -240,44 +280,51 @@
     updateCounter();
   }
 
-  function choose(side) {
-    if (answered || pos >= order.length) return;
-    answered = true;
+  function setResult(el, pct, n, offline) {
+    el.querySelector(".pct").textContent = pct + "%";
+    el.querySelector(".sub").textContent =
+      n + (n === 1 ? " voto" : " votos") + (offline ? " (offline)" : "");
+    el.style.setProperty("--h", pct + "%");
+  }
+
+  async function choose(side) {
+    if (answered || busy || pos >= order.length) return;
+    answered = true; busy = true;
     const q = order[pos];
-    const r = Stats.vote(q.id, side);
-    lastVote = { id: q.id, side, counted: r.counted };
-
-    const total = (r.a + r.b) || 1;
-    const pa = Math.round(r.a / total * 100), pb = 100 - pa;
-    const set = (el, pct, n) => {
-      el.querySelector(".pct").textContent = pct + "%";
-      el.querySelector(".sub").textContent = n + (n === 1 ? " voto" : " votos");
-      el.style.setProperty("--h", pct + "%");
-    };
-    set(optA, pa, r.a);
-    set(optB, pb, r.b);
-
     (side === "a" ? optA : optB).classList.add("picked");
     (side === "a" ? optB : optA).classList.add("lost");
+
+    const r = await Stats.vote(q.id, side);
+    busy = false;
+    lastVote = { id: q.id, side, counted: r.counted };
+
+    const total = (r.pa + r.pb) || 1;
+    const pa = Math.round(r.pa / total * 100), pb = 100 - pa;
+    setResult(optA, pa, r.a, r.offline);
+    setResult(optB, pb, r.b, r.offline);
+
     app.classList.add("revealed", "has-last");
     updateCounter();
   }
 
   function next() {
-    if (!answered || !app.classList.contains("revealed")) return;
+    if (!answered || busy || !app.classList.contains("revealed")) return;
     pos++;
     render();
   }
 
   // Desfaz apenas a ÚLTIMA resposta (um nível só) e reabre a pergunta.
-  function goBack() {
-    if (!lastVote) return;
+  async function goBack() {
+    if (!lastVote || busy) return;
+    busy = true;
     const v = lastVote;
     lastVote = null;
-    Stats.undo(v.id, v.side, v.counted);
+    app.classList.remove("has-last");
+    await Stats.undo(v.id, v.side, v.counted);
+    busy = false;
     const idx = order.findIndex(q => q.id === v.id);
     if (idx >= 0) pos = idx;
-    else { order.splice(pos, 0, Q.find(q => q.id === v.id)); }
+    else order.splice(pos, 0, Q.find(q => q.id === v.id));
     $("end").classList.remove("show");
     render();
   }
