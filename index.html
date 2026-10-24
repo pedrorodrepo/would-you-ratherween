@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#120a1f">
+<title>Você prefere? Edição terror</title>
+<style>
+  :root {
+    --a: #ff7a1a;
+    --b: #7b3fe4;
+    --bg: #120a1f;
+    --ink: #fff;
+  }
+  * { box-sizing: border-box; margin: 0; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    height: 100%; background: var(--bg); color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden;
+  }
+  .app { height: 100dvh; display: flex; flex-direction: column; }
+  header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 16px; font-size: 14px; font-weight: 700; letter-spacing: .5px;
+  }
+  .bar { height: 4px; background: #ffffff22; }
+  .bar i {
+    display: block; height: 100%; width: 0;
+    background: linear-gradient(90deg, var(--a), var(--b));
+    transition: width .4s;
+  }
+  main { flex: 1; display: grid; grid-template-rows: 1fr 1fr; position: relative; min-height: 0; }
+  @media (min-width: 760px) { main { grid-template-rows: none; grid-template-columns: 1fr 1fr; } }
+
+  .opt {
+    position: relative; border: 0; color: #fff; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 28px 24px; text-align: center; font: inherit; overflow: hidden;
+    transition: filter .3s, transform .15s;
+  }
+  .opt:active { transform: scale(.985); }
+  .opt.a { background: var(--a); }
+  .opt.b { background: var(--b); }
+  .opt .txt {
+    font-size: clamp(22px, 5.2vw, 44px); font-weight: 800; line-height: 1.15;
+    text-shadow: 0 2px 10px #0003; max-width: 16ch; text-wrap: balance; z-index: 1;
+  }
+  .opt .pct {
+    font-size: clamp(44px, 12vw, 96px); font-weight: 900; line-height: 1;
+    height: 0; opacity: 0; overflow: hidden; transition: all .4s; z-index: 1;
+  }
+  .opt .sub { font-size: 14px; opacity: 0; height: 0; transition: opacity .4s; z-index: 1; }
+  /* barra de fundo mostrando a porcentagem após o voto */
+  .opt::before {
+    content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 0;
+    background: #00000030; transition: height .8s cubic-bezier(.2,.8,.2,1);
+  }
+  .revealed .opt::before { height: var(--h, 50%); }
+  .revealed .opt .pct { height: 1.1em; opacity: 1; margin-top: 12px; }
+  .revealed .opt .sub { opacity: .9; height: auto; margin-top: 4px; }
+  .revealed .opt.lost { filter: saturate(.55) brightness(.8); }
+  .opt.picked::after {
+    content: "✔ sua escolha"; position: absolute; top: 12px; left: 50%;
+    transform: translateX(-50%); background: #0007; padding: 4px 12px;
+    border-radius: 99px; font-size: 13px; font-weight: 700; z-index: 1;
+  }
+
+  .or {
+    position: absolute; z-index: 2; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: 58px; height: 58px; border-radius: 50%; background: var(--bg); color: #fff;
+    display: grid; place-items: center; font-weight: 900; font-size: 15px;
+    border: 4px solid #fff; transition: opacity .3s; pointer-events: none;
+  }
+  .revealed .or { opacity: 0; }
+
+  footer {
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+    display: flex; justify-content: center; align-items: center; gap: 12px;
+    min-height: 68px; background: var(--bg);
+  }
+  .hint { opacity: .6; font-size: 14px; }
+  .revealed .hint { display: none; }
+  .next {
+    background: #fff; color: #120a1f; border: 0; font: inherit; font-weight: 800;
+    font-size: 17px; padding: 12px 34px; border-radius: 99px; cursor: pointer;
+    display: none;
+  }
+  .revealed .next { display: block; animation: pop .3s; }
+  @keyframes pop { from { transform: scale(.8); opacity: 0; } }
+
+  .back {
+    display: none; background: transparent; color: #fff; border: 2px solid #ffffff55;
+    font: inherit; font-weight: 700; font-size: 15px; padding: 10px 16px;
+    border-radius: 99px; cursor: pointer;
+  }
+  .has-last .back { display: block; }
+
+  .end {
+    position: fixed; inset: 0; background: var(--bg); display: none; flex-direction: column;
+    align-items: center; justify-content: center; gap: 16px; text-align: center;
+    padding: 24px; z-index: 10;
+  }
+  .end.show { display: flex; }
+  .end h2 { font-size: 34px; }
+  .end p { opacity: .8; max-width: 30ch; }
+  .end button {
+    background: var(--a); color: #fff; border: 0; font: inherit; font-weight: 800;
+    padding: 12px 30px; border-radius: 99px; font-size: 17px; cursor: pointer;
+  }
+  .end button.ghost { background: transparent; border: 2px solid #ffffff55; }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <header>
+    <span>&#128128; VOCÊ PREFERE?</span>
+    <span id="counter"></span>
+  </header>
+  <div class="bar"><i id="progress"></i></div>
+
+  <main>
+    <button class="opt a" id="optA" aria-label="Opção A">
+      <span class="txt"></span><span class="pct"></span><span class="sub"></span>
+    </button>
+    <div class="or">OU</div>
+    <button class="opt b" id="optB" aria-label="Opção B">
+      <span class="txt"></span><span class="pct"></span><span class="sub"></span>
+    </button>
+  </main>
+
+  <footer>
+    <button class="back" id="back">↶ Voltar</button>
+    <span class="hint">Toque na sua escolha</span>
+    <button class="next" id="next">Próxima →</button>
+  </footer>
+</div>
+
+<div class="end" id="end">
+  <div style="font-size:64px">&#127820;</div>
+  <h2>Acabaram as perguntas!</h2>
+  <p>Você respondeu todas. Quem teria sobrevivido?</p>
+  <button id="restart">Jogar de novo</button>
+  <button class="ghost" id="backEnd">↶ Mudar a última resposta</button>
+</div>
+
+<script src="questions.js"></script>
+<script>
+(function () {
+  const Q = window.QUESTIONS;
+  const KEY = "wyr-terror-v1";
+
+  /* ---------- Estatísticas (local, fase 1) ----------
+     Os votos e o progresso ficam no localStorage, indexados pelo id fixo da pergunta.
+     Na fase 2, só estas funções trocam para chamadas ao Supabase. */
+  const Stats = {
+    load() {
+      try {
+        const s = JSON.parse(localStorage.getItem(KEY)) || {};
+        return { votes: s.votes || {}, seen: s.seen || [], voted: s.voted || {} };
+      } catch (e) { return { votes: {}, seen: [], voted: {} }; }
+    },
+    save(s) { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) {} },
+
+    // Base de exemplo determinística por id, para as porcentagens não começarem em 50/50.
+    seed(id) {
+      let h = 0;
+      for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+      const x = Math.sin(h) * 10000;
+      const p = 0.3 + (x - Math.floor(x)) * 0.4; // 30% a 70%
+      return { a: Math.round(p * 120), b: Math.round((1 - p) * 120) };
+    },
+
+    counts(id) {
+      const s = this.load(), base = this.seed(id), v = s.votes[id] || { a: 0, b: 0 };
+      return { a: base.a + v.a, b: base.b + v.b };
+    },
+
+    // Registra o voto. "counted" indica se ele de fato somou (false se já tinha votado antes).
+    vote(id, side) {
+      const s = this.load();
+      const already = s.voted[id];
+      if (!s.seen.includes(id)) s.seen.push(id);
+      if (!already) {
+        s.voted[id] = side;
+        s.votes[id] = s.votes[id] || { a: 0, b: 0 };
+        s.votes[id][side]++;
+      }
+      this.save(s);
+      return Object.assign(this.counts(id), { counted: !already });
+    },
+
+    // Desfaz um voto. Se ele não tinha sido contado (replay), só libera a pergunta.
+    undo(id, side, counted) {
+      const s = this.load();
+      s.seen = s.seen.filter(x => x !== id);
+      if (counted) {
+        if (s.votes[id] && s.votes[id][side] > 0) s.votes[id][side]--;
+        delete s.voted[id];
+      }
+      this.save(s);
+    }
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const app = $("app"), optA = $("optA"), optB = $("optB");
+  let order = [], pos = 0, answered = false, lastVote = null;
+
+  function shuffle(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  function buildOrder() {
+    const seen = new Set(Stats.load().seen);
+    order = shuffle(Q.filter(q => !seen.has(q.id)));
+    pos = 0;
+  }
+
+  function updateCounter() {
+    const n = Stats.load().seen.length;
+    $("counter").textContent = n + " / " + Q.length;
+    $("progress").style.width = (n / Q.length * 100) + "%";
+  }
+
+  function render() {
+    app.classList.toggle("has-last", !!lastVote);
+    if (pos >= order.length) { $("end").classList.add("show"); return; }
+    const q = order[pos];
+    answered = false;
+    app.classList.remove("revealed");
+    [optA, optB].forEach(o => {
+      o.classList.remove("picked", "lost");
+      o.style.removeProperty("--h");
+    });
+    optA.querySelector(".txt").textContent = q.a;
+    optB.querySelector(".txt").textContent = q.b;
+    updateCounter();
+  }
+
+  function choose(side) {
+    if (answered || pos >= order.length) return;
+    answered = true;
+    const q = order[pos];
+    const r = Stats.vote(q.id, side);
+    lastVote = { id: q.id, side, counted: r.counted };
+
+    const total = (r.a + r.b) || 1;
+    const pa = Math.round(r.a / total * 100), pb = 100 - pa;
+    const set = (el, pct, n) => {
+      el.querySelector(".pct").textContent = pct + "%";
+      el.querySelector(".sub").textContent = n + (n === 1 ? " voto" : " votos");
+      el.style.setProperty("--h", pct + "%");
+    };
+    set(optA, pa, r.a);
+    set(optB, pb, r.b);
+
+    (side === "a" ? optA : optB).classList.add("picked");
+    (side === "a" ? optB : optA).classList.add("lost");
+    app.classList.add("revealed", "has-last");
+    updateCounter();
+  }
+
+  function next() {
+    if (!answered || !app.classList.contains("revealed")) return;
+    pos++;
+    render();
+  }
+
+  // Desfaz apenas a ÚLTIMA resposta (um nível só) e reabre a pergunta.
+  function goBack() {
+    if (!lastVote) return;
+    const v = lastVote;
+    lastVote = null;
+    Stats.undo(v.id, v.side, v.counted);
+    const idx = order.findIndex(q => q.id === v.id);
+    if (idx >= 0) pos = idx;
+    else { order.splice(pos, 0, Q.find(q => q.id === v.id)); }
+    $("end").classList.remove("show");
+    render();
+  }
+
+  optA.addEventListener("click", () => choose("a"));
+  optB.addEventListener("click", () => choose("b"));
+  $("next").addEventListener("click", next);
+  $("back").addEventListener("click", goBack);
+  $("backEnd").addEventListener("click", goBack);
+  $("restart").addEventListener("click", () => {
+    const s = Stats.load(); s.seen = []; Stats.save(s);
+    lastVote = null;
+    $("end").classList.remove("show");
+    buildOrder(); render();
+  });
+
+  // Atalhos de teclado (opcionais, para computador)
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowLeft") choose("a");
+    else if (e.key === "ArrowRight") choose("b");
+    else if (e.key === " " || e.key === "Enter") { e.preventDefault(); next(); }
+    else if (e.key === "Backspace") { e.preventDefault(); goBack(); }
+  });
+
+  buildOrder();
+  render();
+})();
+</script>
+</body>
+</html>
